@@ -7,7 +7,11 @@ from PIL import Image, ImageDraw, ImageFont
 import re
 import os
 import requests
-from typing import Optional
+from typing import Optional, Tuple
+from torch.utils.data import DataLoader
+import torchvision.utils as vutils
+from pathlib import Path
+from tqdm import tqdm
 
 def _extract_drive_file_id(drive_url: str) -> str:
     patterns = [
@@ -69,6 +73,111 @@ def download_public_gdrive_file(drive_url_or_id: str, destination_path: str, tim
             )
 
     _stream_to_file(r, destination_path)
+
+@torch.no_grad()
+def dump_test_visuals(loader: DataLoader, model, out_dir: Path, max_items: int | None = None, device:str='cpu') -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    for idx, batch in enumerate(tqdm(loader, desc="Saving test visuals")):
+        images = batch["image"].to(device)  # [1,3,H,W] if B=1
+        labels = batch["label"]             # CPU ok for saving
+        if labels.dim() == 4:
+            labels = labels.squeeze(1)
+        logits = model(images)
+        preds  = logits.argmax(dim=1).cpu()  # [B,H,W]
+
+        # save image (assumed in [0,1]); clamp just in case
+        vutils.save_image(images.cpu().clamp(0,1), out_dir / f"img_{idx:06d}.png")
+
+        # save label + pred as binary PNGs {0,255}
+        label_u8 = (labels.cpu().float() == 1).to(torch.uint8) * 255  # [B,H,W]
+        pred_u8  = (preds.float()        == 1).to(torch.uint8) * 255
+
+        # Write each element in batch separately (handles B>1 too)
+        for b in range(label_u8.shape[0]):
+            vutils.save_image(label_u8[b].unsqueeze(0).float()/255.0, out_dir / f"label_{idx:06d}_{b}.png")
+            vutils.save_image(pred_u8[b].unsqueeze(0).float()/255.0,  out_dir / f"pred_{idx:06d}_{b}.png")
+
+        saved += images.size(0)
+        if (max_items is not None) and (saved >= max_items):
+            break
+
+@torch.no_grad()
+def compute_balanced_weights(loader: DataLoader, ignore_index: int = -1) -> Tuple[float, float]:
+    fg_count = 0
+    bg_count = 0
+    for batch in loader:
+        labels = batch["label"]  # [B,H,W] or [B,1,H,W] -> squeeze channel if present
+        if labels.dim() == 4:
+            labels = labels.squeeze(1)
+        valid_mask = (labels != ignore_index)
+        fg_count += (labels.eq(1) & valid_mask).sum().item()
+        bg_count += (labels.eq(0) & valid_mask).sum().item()
+    eps = 1e-6
+    total_valid = max(bg_count, 1)  # keep behavior similar to your original choice
+    ratio = fg_count / (total_valid + eps)
+    # mirror your original weighting logic
+    weight1 = fg_count / (total_valid - fg_count + eps)
+    weight0 = 1.0 / (weight1 + eps)
+    print(f"Label ratio (fg/valid): {ratio:.6f} | Weight0: {weight0:.6f} | Weight1: {weight1:.6f}")
+    return float(weight0), float(weight1)
+
+@torch.no_grad()
+def foreground_iou_from_logits(logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = -1) -> float:
+    """
+    Binary IoU for foreground class (class=1). logits: [B,2,H,W], labels: [B,H,W]
+    """
+    if labels.dim() == 4:
+        labels = labels.squeeze(1)
+    valid = (labels != ignore_index)
+    if valid.sum() == 0:
+        return 1.0
+    preds = logits.argmax(dim=1)  # [B,H,W]
+    preds = preds[valid]
+    gt    = labels[valid]
+
+    inter = ((preds == 1) & (gt == 1)).sum().float()
+    union = ((preds == 1) | (gt == 1)).sum().float()
+    if union == 0:
+        return 1.0
+    return (inter / union).item()
+
+def visualize_triplets_inline(trained_model, loader, device, num_items: int = 3):
+    trained_model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            images = batch["image"].to(device)                   # [B,3,H,W], assumed in [0,1]
+            labels = batch["label"]                               # [B,H,W] or [B,1,H,W] on CPU
+            if labels.dim() == 4:
+                labels = labels.squeeze(1)
+            logits = trained_model(images)                        # [B,2,H,W] for CE
+            preds  = logits.argmax(dim=1).cpu()                   # [B,H,W]
+
+            images_np = images.detach().cpu().clamp(0,1).permute(0,2,3,1).numpy()
+            labels_np = labels.detach().cpu().numpy()
+            preds_np  = preds.detach().cpu().numpy()
+
+            k = min(num_items, images_np.shape[0])
+            fig, axes = plt.subplots(k, 3, figsize=(9, 3*k))
+            if k == 1:
+                axes = np.expand_dims(axes, axis=0)
+
+            for i in range(k):
+                axes[i, 0].imshow(images_np[i])
+                axes[i, 0].set_title("Image")
+                axes[i, 0].axis("off")
+
+                axes[i, 1].imshow(labels_np[i], cmap="gray", vmin=0, vmax=1)
+                axes[i, 1].set_title("Label")
+                axes[i, 1].axis("off")
+
+                axes[i, 2].imshow(preds_np[i], cmap="gray", vmin=0, vmax=1)
+                axes[i, 2].set_title("Prediction")
+                axes[i, 2].axis("off")
+
+            plt.tight_layout()
+            plt.show()
+
 
 # Clear directories to regenerate file distribution
 def clear_directory(directory_path):
