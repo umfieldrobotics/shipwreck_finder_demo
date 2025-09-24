@@ -11,8 +11,6 @@ from typing import Optional, Tuple
 from torch.utils.data import DataLoader
 import torchvision.utils as vutils
 from pathlib import Path
-from tqdm import tqdm
-
 ##############################
 # Google drive related utils #
 ##############################
