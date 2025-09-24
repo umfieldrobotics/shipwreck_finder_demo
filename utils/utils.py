@@ -13,6 +13,9 @@ import torchvision.utils as vutils
 from pathlib import Path
 from tqdm import tqdm
 
+##############################
+# Google drive related utils #
+##############################
 def _extract_drive_file_id(drive_url: str) -> str:
     patterns = [
         r"drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)",
@@ -50,16 +53,13 @@ def download_public_gdrive_file(drive_url_or_id: str, destination_path: str, tim
     base = "https://drive.google.com/uc"
     session = requests.Session()
 
-    # First attempt: try direct export=download (works for small files)
     params = {"id": file_id, "export": "download"}
     r = session.get(base, params=params, stream=True, timeout=timeout_sec)
     r.raise_for_status()
 
-    # If Google shows the interstitial page, it returns HTML with a confirm token.
     if "text/html" in r.headers.get("Content-Type", ""):
         token = _get_confirm_token_from_html(r.text)
         if not token:
-            # Sometimes the token is delivered via a cookie named 'download_warning'
             token = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
 
         if token:
@@ -67,33 +67,33 @@ def download_public_gdrive_file(drive_url_or_id: str, destination_path: str, tim
             r = session.get(base, params=params, stream=True, timeout=timeout_sec)
             r.raise_for_status()
         else:
-            # If we cannot find a token, the file is likely not publicly accessible.
             raise PermissionError(
                 "Could not obtain confirm token. Ensure the file is PUBLIC or use Drive mounting."
             )
 
     _stream_to_file(r, destination_path)
 
+#############################
+# Visualization and logging #
+#############################
+
 @torch.no_grad()
-def dump_test_visuals(loader: DataLoader, model, out_dir: Path, max_items: int | None = None, device:str='cpu') -> None:
+def dump_test_visuals(loader: DataLoader, model, out_dir: Path, max_items: Optional[int] = None, device: str = 'cpu') -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
     for idx, batch in enumerate(tqdm(loader, desc="Saving test visuals")):
-        images = batch["image"].to(device)  # [1,3,H,W] if B=1
-        labels = batch["label"]             # CPU ok for saving
+        images = batch["image"].to(device) 
+        labels = batch["label"]             
         if labels.dim() == 4:
             labels = labels.squeeze(1)
         logits = model(images)
-        preds  = logits.argmax(dim=1).cpu()  # [B,H,W]
+        preds  = logits.argmax(dim=1).cpu()
 
-        # save image (assumed in [0,1]); clamp just in case
         vutils.save_image(images.cpu().clamp(0,1), out_dir / f"img_{idx:06d}.png")
 
-        # save label + pred as binary PNGs {0,255}
-        label_u8 = (labels.cpu().float() == 1).to(torch.uint8) * 255  # [B,H,W]
+        label_u8 = (labels.cpu().float() == 1).to(torch.uint8) * 255
         pred_u8  = (preds.float()        == 1).to(torch.uint8) * 255
 
-        # Write each element in batch separately (handles B>1 too)
         for b in range(label_u8.shape[0]):
             vutils.save_image(label_u8[b].unsqueeze(0).float()/255.0, out_dir / f"label_{idx:06d}_{b}.png")
             vutils.save_image(pred_u8[b].unsqueeze(0).float()/255.0,  out_dir / f"pred_{idx:06d}_{b}.png")
@@ -103,20 +103,20 @@ def dump_test_visuals(loader: DataLoader, model, out_dir: Path, max_items: int |
             break
 
 @torch.no_grad()
-def compute_balanced_weights(loader: DataLoader, ignore_index: int = -1) -> Tuple[float, float]:
+def compute_balanced_weights(loader, ignore_index= -1) -> Tuple[float, float]:
+    # anja
     fg_count = 0
     bg_count = 0
     for batch in loader:
-        labels = batch["label"]  # [B,H,W] or [B,1,H,W] -> squeeze channel if present
+        labels = batch["label"]
         if labels.dim() == 4:
             labels = labels.squeeze(1)
         valid_mask = (labels != ignore_index)
         fg_count += (labels.eq(1) & valid_mask).sum().item()
         bg_count += (labels.eq(0) & valid_mask).sum().item()
     eps = 1e-6
-    total_valid = max(bg_count, 1)  # keep behavior similar to your original choice
+    total_valid = max(bg_count, 1)
     ratio = fg_count / (total_valid + eps)
-    # mirror your original weighting logic
     weight1 = fg_count / (total_valid - fg_count + eps)
     weight0 = 1.0 / (weight1 + eps)
     print(f"Label ratio (fg/valid): {ratio:.6f} | Weight0: {weight0:.6f} | Weight1: {weight1:.6f}")
@@ -124,15 +124,12 @@ def compute_balanced_weights(loader: DataLoader, ignore_index: int = -1) -> Tupl
 
 @torch.no_grad()
 def foreground_iou_from_logits(logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = -1) -> float:
-    """
-    Binary IoU for foreground class (class=1). logits: [B,2,H,W], labels: [B,H,W]
-    """
     if labels.dim() == 4:
         labels = labels.squeeze(1)
     valid = (labels != ignore_index)
     if valid.sum() == 0:
         return 1.0
-    preds = logits.argmax(dim=1)  # [B,H,W]
+    preds = logits.argmax(dim=1)
     preds = preds[valid]
     gt    = labels[valid]
 
@@ -146,12 +143,12 @@ def visualize_triplets_inline(trained_model, loader, device, num_items: int = 3)
     trained_model.eval()
     with torch.no_grad():
         for batch in loader:
-            images = batch["image"].to(device)                   # [B,3,H,W], assumed in [0,1]
-            labels = batch["label"]                               # [B,H,W] or [B,1,H,W] on CPU
+            images = batch["image"].to(device)                   
+            labels = batch["label"]                             
             if labels.dim() == 4:
                 labels = labels.squeeze(1)
-            logits = trained_model(images)                        # [B,2,H,W] for CE
-            preds  = logits.argmax(dim=1).cpu()                   # [B,H,W]
+            logits = trained_model(images)
+            preds  = logits.argmax(dim=1).cpu()                 
 
             images_np = images.detach().cpu().clamp(0,1).permute(0,2,3,1).numpy()
             labels_np = labels.detach().cpu().numpy()
@@ -179,7 +176,6 @@ def visualize_triplets_inline(trained_model, loader, device, num_items: int = 3)
             plt.show()
 
 
-# Clear directories to regenerate file distribution
 def clear_directory(directory_path):
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
@@ -191,33 +187,14 @@ def clear_directory(directory_path):
         except Exception as e:
             print(f'Failed to delete {file_path}. Reason: {e}')
 
-def save_combined_image(image, pred, label, test_file, pred_path, ship_iou=None, terrain_iou=None, divider_width=5, saliency_map=None):    
-    """
-    Saves a single image containing the original image, prediction, and label side by side,
-    with thin white vertical dividers between them, and overlays IoU scores.
+def save_combined_image(image, pred, label, test_file, pred_path, ship_iou=None, terrain_iou=None, divider_width=5, saliency_map=None):
+    img = image.squeeze().cpu().numpy()
+    img = (255 * img).astype(np.uint8)
+    img_pil = Image.fromarray(img)
 
-    Parameters:
-    - image: PyTorch tensor (C, H, W) - The input image.
-    - pred: NumPy array (H, W) - The predicted mask.
-    - label: NumPy array (H, W) - The ground truth mask.
-    - test_file: str - The original file path (used for naming output file).
-    - pred_path: str - Directory to save the output image.
-    - ship_iou: float - Ship IoU score to overlay.
-    - terrain_iou: float - Terrain IoU score to overlay.
-    - divider_width: int - Width of the divider lines.
-    """
-
-    # Convert the image (C, H, W) tensor to (H, W, C) NumPy array and scale to [0,255]
-    img = image.squeeze().cpu().numpy()  # Convert to (H, W, C)
-    img = (255 * img).astype(np.uint8)  # Scale to [0, 255]
-    img_pil = Image.fromarray(img)  # Convert to PIL image
-
-    # pred_img = Image.fromarray((255 * pred[0, ...]).astype(np.uint8))
-    # label_img = Image.fromarray((255 * label.squeeze()).astype(np.uint8))
     pred_img = Image.fromarray((127.5 * pred[0, ...]+127.5).astype(np.uint8))
     label_img = Image.fromarray((127.5*label.squeeze()+127.5).astype(np.uint8))
 
-    # Ensure all images have the same height
     height = img_pil.height
     pred_img = pred_img.resize((pred_img.width, height))
     label_img = label_img.resize((label_img.width, height))
@@ -225,18 +202,15 @@ def save_combined_image(image, pred, label, test_file, pred_path, ship_iou=None,
     
     if saliency_map is not None:
         saliency_img = Image.fromarray(255 * saliency_map[0])
-        saliency_img = saliency_img.resize((img_pil.width, height))  # Match height & width
+        saliency_img = saliency_img.resize((img_pil.width, height))
 
-    # Create a white divider
     divider = Image.new("RGB", (divider_width, height), color=(128, 128, 128))
 
-    # Calculate final image width: 3 images + 2 dividers
     combined_width = img_pil.width + pred_img.width + label_img.width + (2 * divider_width)
     if saliency_map is not None:
         combined_width += saliency_img.width + divider_width
     combined_img = Image.new("RGB", (combined_width, height), color=(0, 0, 0))
 
-    # Paste images with dividers in between
     x_offset = 0
     combined_img.paste(img_pil, (x_offset, 0))
     x_offset += img_pil.width
@@ -253,7 +227,6 @@ def save_combined_image(image, pred, label, test_file, pred_path, ship_iou=None,
         x_offset += divider_width
         combined_img.paste(saliency_img.convert("RGB"), (x_offset, 0))
 
-    # Draw IoU text at bottom center
     if ship_iou is not None or terrain_iou is not None:
         draw = ImageDraw.Draw(combined_img)
         try:
@@ -266,9 +239,8 @@ def save_combined_image(image, pred, label, test_file, pred_path, ship_iou=None,
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
         text_x = (combined_img.width - text_width) // 2
-        text_y = combined_img.height - text_height - 10  # Slight margin from bottom
+        text_y = combined_img.height - text_height - 10
 
-        # Add black rectangle for better visibility
         padding = 5
         draw.rectangle(
             [text_x - padding, text_y - padding, text_x + text_width + padding, text_y + text_height + padding],
