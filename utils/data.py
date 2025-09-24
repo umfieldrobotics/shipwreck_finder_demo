@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from utils.utils import normalize_nonzero
+from shipwreck_finder_demo.utils.utils import normalize_nonzero
 
 
 class MBESDataset(Dataset):
