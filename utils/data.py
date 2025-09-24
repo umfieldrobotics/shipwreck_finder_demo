@@ -10,12 +10,12 @@ from shipwreck_finder_demo.utils.utils import normalize_nonzero
 
 
 class MBESDataset(Dataset):
-    def __init__(self, root_dir, transform=None, byt=False, aug_multiplier=0, using_hillshade=False, using_inpainted=False, resize_to_div_16=False):
+    def __init__(self, root_dir, img_size=400, transform=None, byt=False, aug_multiplier=0, using_hillshade=False, using_inpainted=False, resize_to_div_16=False):
         self.root_dir = root_dir
         self.transform = transform
         self.byt = byt
         self.aug_multiplier = aug_multiplier  # Number of additional augmented samples per image
-        self.img_size = 400
+        self.img_size = img_size
         
         self.using_hillshade = using_hillshade
         self.using_inpainted = using_inpainted
