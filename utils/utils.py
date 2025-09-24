@@ -1,10 +1,74 @@
 import os
 import shutil
-from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from PIL import Image, ImageDraw, ImageFont
+import re
+import os
+import requests
+from typing import Optional
+
+def _extract_drive_file_id(drive_url: str) -> str:
+    patterns = [
+        r"drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com\/uc\?id=([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com\/uc\?export=download&id=([a-zA-Z0-9_-]+)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, drive_url)
+        if m:
+            return m.group(1)
+    plain_id = re.fullmatch(r"[a-zA-Z0-9_-]{20,}", drive_url.strip())
+    if plain_id:
+        return drive_url.strip()
+    raise ValueError("Could not parse a Google Drive FILE ID from the provided URL.")
+
+def _get_confirm_token_from_html(text: str) -> Optional[str]:
+    m = re.search(r'confirm=([0-9A-Za-z_-]+)', text)
+    return m.group(1) if m else None
+
+def _stream_to_file(response: requests.Response, destination_path: str, chunk_bytes: int = 1 << 20):
+    os.makedirs(os.path.dirname(os.path.abspath(destination_path)), exist_ok=True)
+    total_bytes = int(response.headers.get("Content-Length", "0")) or None
+    written = 0
+    with open(destination_path, "wb") as f:
+        for chunk in response.iter_content(chunk_size=chunk_bytes):
+            if chunk:
+                f.write(chunk)
+                written += len(chunk)
+    if os.path.getsize(destination_path) == 0:
+        raise IOError("Downloaded file is empty; the link may not be public or is invalid.")
+
+def download_public_gdrive_file(drive_url_or_id: str, destination_path: str, timeout_sec: int = 60):
+    file_id = _extract_drive_file_id(drive_url_or_id)
+    base = "https://drive.google.com/uc"
+    session = requests.Session()
+
+    # First attempt: try direct export=download (works for small files)
+    params = {"id": file_id, "export": "download"}
+    r = session.get(base, params=params, stream=True, timeout=timeout_sec)
+    r.raise_for_status()
+
+    # If Google shows the interstitial page, it returns HTML with a confirm token.
+    if "text/html" in r.headers.get("Content-Type", ""):
+        token = _get_confirm_token_from_html(r.text)
+        if not token:
+            # Sometimes the token is delivered via a cookie named 'download_warning'
+            token = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
+
+        if token:
+            params["confirm"] = token
+            r = session.get(base, params=params, stream=True, timeout=timeout_sec)
+            r.raise_for_status()
+        else:
+            # If we cannot find a token, the file is likely not publicly accessible.
+            raise PermissionError(
+                "Could not obtain confirm token. Ensure the file is PUBLIC or use Drive mounting."
+            )
+
+    _stream_to_file(r, destination_path)
 
 # Clear directories to regenerate file distribution
 def clear_directory(directory_path):
