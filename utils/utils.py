@@ -78,29 +78,74 @@ def download_public_gdrive_file(drive_url_or_id: str, destination_path: str, tim
 #############################
 
 @torch.no_grad()
-def dump_test_visuals(loader: DataLoader, model, out_dir: Path, max_items: Optional[int] = None, device: str = 'cpu') -> None:
+def dump_test_visuals(loader: DataLoader, model, out_dir: Path,
+                      max_items: Optional[int] = None, device: str = "cpu") -> None:
+    """
+    Save a single figure per batch with rows = batch size and columns = [Image | Label | Pred].
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
-    for idx, batch in enumerate(tqdm(loader, desc="Saving test visuals")):
-        images = batch["image"].to(device) 
-        labels = batch["label"]             
+
+    for batch_idx, batch in enumerate(loader):
+        images = batch["image"].to(device)   # [B,3,H,W] or [B,1,H,W]
+        labels = batch["label"].to(device)   # [B,H,W] or [B,1,H,W]
         if labels.dim() == 4:
             labels = labels.squeeze(1)
+
         logits = model(images)
-        preds  = logits.argmax(dim=1).cpu()
+        preds = logits.argmax(dim=1)         # [B,H,W]
 
-        vutils.save_image(images.cpu().clamp(0,1), out_dir / f"img_{idx:06d}.png")
+        # how many rows to show from this batch (respect max_items if set)
+        batch_size = images.size(0)
+        rows_to_show = batch_size
+        if max_items is not None:
+            remaining = max(0, max_items - saved)
+            if remaining == 0:
+                break
+            rows_to_show = min(rows_to_show, remaining)
 
-        label_u8 = (labels.cpu().float() == 1).to(torch.uint8) * 255
-        pred_u8  = (preds.float()        == 1).to(torch.uint8) * 255
+        # create one figure per batch
+        fig, axes = plt.subplots(rows_to_show, 3, figsize=(12, 3.2 * rows_to_show), squeeze=False)
+        # titles on first row
+        titles = ["Image", "Label", "Prediction"]
+        for c, t in enumerate(titles):
+            axes[0, c].set_title(t, fontsize=11)
 
-        for b in range(label_u8.shape[0]):
-            vutils.save_image(label_u8[b].unsqueeze(0).float()/255.0, out_dir / f"label_{idx:06d}_{b}.png")
-            vutils.save_image(pred_u8[b].unsqueeze(0).float()/255.0,  out_dir / f"pred_{idx:06d}_{b}.png")
+        for r in range(rows_to_show):
+            img = images[r].detach().cpu()             # [C,H,W]
+            if img.dim() == 3 and img.size(0) in (1, 3):
+                img = img if img.size(0) == 3 else img.repeat(3, 1, 1)
+                img = img.clamp(0, 1).permute(1, 2, 0).numpy()  # -> [H,W,3]
+            else:
+                img = img.squeeze().clamp(0, 1).numpy()
+                if img.ndim == 2:
+                    img = np.stack([img]*3, axis=-1)
 
-        saved += images.size(0)
+            lab = labels[r].detach().cpu()
+            if lab.max() > 1:
+                lab = (lab > 127).to(lab.dtype)
+            lab_np = lab.numpy()
+
+            pred_np = preds[r].detach().cpu().numpy()
+
+            axes[r, 0].imshow(img)
+            axes[r, 0].axis("off")
+
+            axes[r, 1].imshow(lab_np, cmap="gray", vmin=0, vmax=1)
+            axes[r, 1].axis("off")
+
+            axes[r, 2].imshow(pred_np, cmap="gray", vmin=0, vmax=1)
+            axes[r, 2].axis("off")
+
+        plt.tight_layout()
+        fig_path = out_dir / f"batch_{batch_idx:06d}.png"
+        plt.savefig(fig_path, dpi=150)
+        plt.close(fig)
+
+        saved += rows_to_show
         if (max_items is not None) and (saved >= max_items):
             break
+
 
 @torch.no_grad()
 def compute_balanced_weights(loader, ignore_index= -1) -> Tuple[float, float]:
