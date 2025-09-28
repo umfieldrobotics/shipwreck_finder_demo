@@ -9,7 +9,7 @@ from IPython.display import Image as IPyImage, display
 
 def make_labeled_segmentation_gif(
     target_dir: Path,
-    frame_glob: str = "epoch_*/batch_000002.png",
+    frame_glob: str = "epoch_*/batch_000001.png",
     out_name: str = "segmentation_evolution.gif",
     duration_ms: int = 500,
 ):
