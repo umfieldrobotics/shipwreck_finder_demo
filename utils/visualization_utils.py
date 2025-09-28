@@ -106,7 +106,7 @@ def overlay_label_on_image01(image01_hwc, label01_hw, alpha=0.4):
 
 
 def plot_train_test_grid(train_dataset, test_dataset, N=5):
-    fig, axes = plt.subplots(N, 7, figsize=(14, N))
+    fig, axes = plt.subplots(N, 7, figsize=(14, 2*N))
     titles = [
         "Train Image",
         "Train Label",
@@ -125,7 +125,7 @@ def plot_train_test_grid(train_dataset, test_dataset, N=5):
         train_lab = to_numpy_label01(train_sample["label"])
         train_ovr = overlay_label_on_image01(train_img, train_lab)
 
-        axes[r, 0].imshow(train_img)
+        axes[r, 0].imshow(train_img, cmap="gray")
         axes[r, 0].axis("off")
 
         axes[r, 1].imshow(train_lab, cmap="gray", vmin=0, vmax=1)
@@ -142,7 +142,7 @@ def plot_train_test_grid(train_dataset, test_dataset, N=5):
         test_lab = to_numpy_label01(test_sample["label"])
         test_ovr = overlay_label_on_image01(test_img, test_lab)
 
-        axes[r, 4].imshow(test_img)
+        axes[r, 4].imshow(test_img,cmap="gray")
         axes[r, 4].axis("off")
 
         axes[r, 5].imshow(test_lab, cmap="gray", vmin=0, vmax=1)

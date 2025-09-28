@@ -76,7 +76,7 @@ def download_public_gdrive_file(drive_url_or_id: str, destination_path: str, tim
 #############################
 
 @torch.no_grad()
-def dump_test_visuals(loader: DataLoader, model, out_dir: Path,
+def dump_visuals(loader: DataLoader, model, out_dir: Path,
                       max_items: Optional[int] = None, device: str = "cpu") -> None:
     """
     Save a single figure per batch with rows = batch size and columns = [Image | Label | Pred].
